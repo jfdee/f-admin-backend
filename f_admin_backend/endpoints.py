@@ -1,91 +1,30 @@
-import os
-from datetime import datetime
-
 from convert_case import kebab_case, pascal_case
-from starlette import status
-from starlette.exceptions import HTTPException
 from tortoise import Tortoise
 
-from .consts import DATE_FORMAT, DATETIME_FORMAT
-
-ADMIN_EXCLUDE_MODELS: list = os.environ.get('F_ADMIN_EXCLUDE_MODELS', [])
-
-
-def _get_model(code: str):
-    model = Tortoise.apps['models'].get(pascal_case(code))
-    if not model:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return model
+from .consts import PAGE_SIZE
+from .logic.actions import to_internal_value, to_representation
+from .logic.getters import get_model, get_model_instance
+from .settings import settings
 
 
-async def _get_model_instance(code: str, pk: int):
-    model = _get_model(code)
-    instance = await model.filter(pk=pk).first()
-    if not instance:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return instance
-
-
-def get_menu_items():
-    data: list[dict] = []
+def get_menu_items() -> list:
+    items: list[dict] = []
     for name, meta in Tortoise.apps.get('models').items():
-        if name in ADMIN_EXCLUDE_MODELS:
+        if name in settings.ADMIN_EXCLUDE_MODELS:
             continue
-        data.append({
+        items.append({
             'code': kebab_case(string=name),
             'label': getattr(meta.Meta, 'verbose_name_plural', name),
             'fields': [],
         })
-    return data
-
-
-async def get_paginator(model):
-    return {'count': await model.all().count()}
-
-
-async def to_representation(fields: list, queryset) -> list:
-    """object -> json"""
-    items = []
-    for obj in queryset:
-        item = {}
-        for field in fields:
-            f_type = field['type']
-            if f_type == 'related':
-                value = await getattr(obj, field['name'])
-                value = str(value) if value else None
-            else:
-                value = getattr(obj, field['name'])
-            if value and f_type == 'datetime':
-                value = value.strftime(DATETIME_FORMAT)
-            if value and f_type == 'date':
-                value = value.strftime(DATE_FORMAT)
-            item[field['name']] = value
-        items.append(item)
     return items
 
 
-async def to_internal_value(model, data: dict):
-    """json -> object"""
-    _data = {}
-    for key, value in data.items():
-        # TODO(разобраться с наличием value и default полей)
-        f_meta = model._meta.fields_map[key]
-        f_type = f_meta.field_type.__name__
-        if f_type == 'datetime' and value:
-            value = datetime.strptime(value, DATETIME_FORMAT)
-        if f_type == 'date' and value:
-            value = datetime.strptime(value, DATE_FORMAT).date()
-        if f_type == 'bool' and value is None:
-            value = f_meta.default
-        if f_type == 'int':
-            value = f_meta.default if not value else int(value)
-        if getattr(f_meta, 'related_model', None):
-            key = f'{key}_id'
-        _data[key] = value
-    return _data
+async def get_paginator(model) -> dict:
+    return {'count': await model.all().count()}
 
 
-async def get_list_meta_fields(model):
+async def get_list_meta_fields(model) -> list:
     fields = []
     for f_name, f_meta in model._meta.fields_map.items():
         if not f_meta.field_type:
@@ -97,26 +36,33 @@ async def get_list_meta_fields(model):
             'type': f_meta.field_type.__name__,
         }
         if f_meta.allows_generated and f_meta.source_field:
-            # fk field_id
+            # ForeignKey pk "{field}_id"
             field_meta['type'] = 'related_id'
         if getattr(f_meta, 'related_model', None):
+            # ForeignKey
             field_meta['type'] = 'related'
         fields.append(field_meta)
     return fields
 
 
-async def menu_item_list(code: str, page: int, search: str = None):
-    model = _get_model(code)
-    limit = 10
-    offset = (page - 1) * limit
-    queryset = await model.all().order_by('-created_at').limit(limit).offset(offset)
-    fields_meta = await get_list_meta_fields(model)
+async def menu_item_list(code: str, page: int, search: str = None) -> dict:
+    model = get_model(code=code)
+    offset = (page - 1) * PAGE_SIZE
+    queryset = await model.all().order_by('-id').limit(PAGE_SIZE).offset(offset)
+    fields_meta = await get_list_meta_fields(model=model)
     items = await to_representation(fields=fields_meta, queryset=queryset)
     paginator = await get_paginator(model)
-    return {'data': items, 'meta': {'fields': fields_meta, 'paginator': paginator}}
+    return {
+        'data': items,
+        'meta': {
+            'fields': fields_meta,
+            'paginator': paginator,
+        },
+    }
 
 
-async def get_object_meta_fields(model):
+async def get_object_meta_fields(model) -> list:
+    """Meta for POST/PUT"""
     fields = []
     for f_name, f_meta in model._meta.fields_map.items():
         if not f_meta.field_type:
@@ -147,36 +93,36 @@ async def get_object_meta_fields(model):
     return fields
 
 
-async def menu_item_meta(code: str):
-    model = _get_model(code)
-    fields = await get_object_meta_fields(model)
+async def menu_item_meta(code: str) -> dict:
+    model = get_model(code=code)
+    fields = await get_object_meta_fields(model=model)
     return {'fields': fields}
 
 
-async def menu_item_post(code: str, data: dict):
-    model = _get_model(code)
+async def menu_item_post(code: str, data: dict) -> dict:
+    model = get_model(code=code)
     data = await to_internal_value(model=model, data=data)
     instance = await model.create(**data)
     return {'pk': instance.pk}
 
 
-async def menu_item_instance_retrieve(code: str, pk: int):
-    instance = await _get_model_instance(code, pk)
+async def menu_item_instance_retrieve(code: str, pk: int) -> dict:
+    instance = await get_model_instance(code=code, pk=pk)
     return dict(instance)
 
 
-async def menu_item_instance_put(code: str, pk: int, data: dict):
-    model = _get_model(code)
+async def menu_item_instance_put(code: str, pk: int, data: dict) -> dict:
+    model = get_model(code=code)
     data = await to_internal_value(model=model, data=data)
-    instance = await _get_model_instance(code, pk)
+    instance = await get_model_instance(code=code, pk=pk)
     for key, value in data.items():
         setattr(instance, key, value)
     await instance.save()
     return dict(instance)
 
 
-async def menu_item_instance_delete(code: str, pk: int):
-    instance = await _get_model_instance(code, pk)
+async def menu_item_instance_delete(code: str, pk: int) -> None:
+    instance = await get_model_instance(code=code, pk=pk)
     await instance.delete()
 
 

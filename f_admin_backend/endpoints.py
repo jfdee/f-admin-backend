@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 
 from convert_case import kebab_case, pascal_case
@@ -5,20 +6,9 @@ from starlette import status
 from starlette.exceptions import HTTPException
 from tortoise import Tortoise
 
-from conf import settings  # TODO()
+from .consts import DATE_FORMAT, DATETIME_FORMAT
 
-
-def get_menu_items():
-    data: list[dict[str, str]] = []
-    for name, meta in Tortoise.apps.get('models').items():
-        if name in settings.ADMIN_EXCLUDE_MODELS:
-            continue
-        data.append({
-            'code': kebab_case(string=name),
-            'label': getattr(meta.Meta, 'verbose_name_plural', name),
-            'fields': [],
-        })
-    return data
+ADMIN_EXCLUDE_MODELS: list = os.environ.get('F_ADMIN_EXCLUDE_MODELS', [])
 
 
 def _get_model(code: str):
@@ -36,8 +26,17 @@ async def _get_model_instance(code: str, pk: int):
     return instance
 
 
-DATE_FORMAT: str = '%d.%m.%Y'
-DATETIME_FORMAT: str = '%d.%m.%Y %H:%S'
+def get_menu_items():
+    data: list[dict] = []
+    for name, meta in Tortoise.apps.get('models').items():
+        if name in ADMIN_EXCLUDE_MODELS:
+            continue
+        data.append({
+            'code': kebab_case(string=name),
+            'label': getattr(meta.Meta, 'verbose_name_plural', name),
+            'fields': [],
+        })
+    return data
 
 
 async def get_paginator(model):

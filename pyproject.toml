@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "f-admin-backend"
+name = "f-admin-client"
 version = "0.0.1"
 dependencies = [
   "fastapi",

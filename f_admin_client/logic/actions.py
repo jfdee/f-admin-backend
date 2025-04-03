@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from f_admin_backend.consts import DATE_FORMAT, DATETIME_FORMAT
+from f_admin_client.consts import DATE_FORMAT, DATETIME_FORMAT
 
 
 async def to_representation(fields: list, queryset) -> list:
